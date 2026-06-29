@@ -1,0 +1,304 @@
+{
+  "info": {
+    "name": "Portfolio Attribution API",
+    "description": "Portfolio Performance Attribution API with Resilient Pricing Fallback",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8081",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "T1 — Valid: All Primary Pricing",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/performance/attribution",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "performance", "attribution"]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"requestId\": \"ATTR-2001\",\n  \"portfolioId\": \"PF-2201\",\n  \"valuationDate\": \"2026-06-14\",\n  \"currency\": \"USD\",\n  \"requestedBy\": \"advisor01\",\n  \"groups\": [\n    { \"groupName\": \"Equity\",      \"weightPct\": 60, \"returnPct\": 1.5 },\n    { \"groupName\": \"FixedIncome\", \"weightPct\": 30, \"returnPct\": 0.4 },\n    { \"groupName\": \"Cash\",        \"weightPct\": 10, \"returnPct\": 0.1 }\n  ]\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+              "pm.test('status is VALID', () => pm.expect(pm.response.json().status).to.eql('VALID'));",
+              "pm.test('degraded is false', () => pm.expect(pm.response.json().degraded).to.be.false);",
+              "pm.test('all pricingMode PRIMARY', () => {",
+              "  const groups = pm.response.json().groupContributions;",
+              "  groups.forEach(g => pm.expect(g.pricingMode).to.eql('PRIMARY'));",
+              "});",
+              "pm.test('no warnings', () => pm.expect(pm.response.json().warnings).to.be.empty);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "T2 — Valid: Fallback Pricing Used",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/performance/attribution",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "performance", "attribution"]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"requestId\": \"ATTR-2002\",\n  \"portfolioId\": \"PF-2201\",\n  \"valuationDate\": \"2026-06-14\",\n  \"currency\": \"USD\",\n  \"requestedBy\": \"advisor01\",\n  \"groups\": [\n    { \"groupName\": \"Equity\",      \"weightPct\": 60, \"returnPct\": 1.5 },\n    { \"groupName\": \"FixedIncome\", \"weightPct\": 30, \"returnPct\": 0.4 },\n    { \"groupName\": \"Cash\",        \"weightPct\": 10, \"returnPct\": null, \"fallbackReturnPct\": 0.05 }\n  ]\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+              "pm.test('status is VALID', () => pm.expect(pm.response.json().status).to.eql('VALID'));",
+              "pm.test('Cash pricingMode is FALLBACK_USED', () => {",
+              "  const cash = pm.response.json().groupContributions.find(g => g.groupName === 'Cash');",
+              "  pm.expect(cash.pricingMode).to.eql('FALLBACK_USED');",
+              "});",
+              "pm.test('warning contains Fallback', () => {",
+              "  pm.expect(pm.response.json().warnings[0]).to.include('Fallback');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "T3 — Degraded: One Group Missing Return",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/performance/attribution",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "performance", "attribution"]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"requestId\": \"ATTR-2003\",\n  \"portfolioId\": \"PF-2201\",\n  \"valuationDate\": \"2026-06-14\",\n  \"currency\": \"USD\",\n  \"requestedBy\": \"advisor01\",\n  \"groups\": [\n    { \"groupName\": \"Equity\",      \"weightPct\": 60, \"returnPct\": 1.5 },\n    { \"groupName\": \"FixedIncome\", \"weightPct\": 30, \"returnPct\": 0.4 },\n    { \"groupName\": \"Cash\",        \"weightPct\": 10, \"returnPct\": null }\n  ]\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+              "pm.test('status is DEGRADED', () => pm.expect(pm.response.json().status).to.eql('DEGRADED'));",
+              "pm.test('degraded is true', () => pm.expect(pm.response.json().degraded).to.be.true);",
+              "pm.test('warning mentions Cash excluded', () => {",
+              "  pm.expect(pm.response.json().warnings[0]).to.include('Cash');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "T4 — Review Required: Two Groups Missing Return",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/performance/attribution",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "performance", "attribution"]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"requestId\": \"ATTR-2004\",\n  \"portfolioId\": \"PF-2201\",\n  \"valuationDate\": \"2026-06-14\",\n  \"currency\": \"USD\",\n  \"requestedBy\": \"advisor01\",\n  \"groups\": [\n    { \"groupName\": \"Equity\",      \"weightPct\": 80, \"returnPct\": 1.5 },\n    { \"groupName\": \"FixedIncome\", \"weightPct\": 10, \"returnPct\": null },\n    { \"groupName\": \"Cash\",        \"weightPct\": 10, \"returnPct\": null }\n  ]\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+              "pm.test('status is REVIEW_REQUIRED', () => pm.expect(pm.response.json().status).to.eql('REVIEW_REQUIRED'));",
+              "pm.test('degraded is true', () => pm.expect(pm.response.json().degraded).to.be.true);",
+              "pm.test('two warnings', () => pm.expect(pm.response.json().warnings.length).to.eql(2));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "T5 — Invalid Input: Weight Too Low",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/performance/attribution",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "performance", "attribution"]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"requestId\": \"ATTR-2005\",\n  \"portfolioId\": \"PF-2201\",\n  \"valuationDate\": \"2026-06-14\",\n  \"currency\": \"USD\",\n  \"requestedBy\": \"advisor01\",\n  \"groups\": [\n    { \"groupName\": \"Equity\",      \"weightPct\": 50, \"returnPct\": 1.5 },\n    { \"groupName\": \"FixedIncome\", \"weightPct\": 30, \"returnPct\": 0.4 }\n  ]\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('HTTP 400', () => pm.response.to.have.status(400));",
+              "pm.test('status is INVALID_INPUT', () => pm.expect(pm.response.json().status).to.eql('INVALID_INPUT'));",
+              "pm.test('warning mentions valid range', () => {",
+              "  pm.expect(pm.response.json().warnings[0]).to.include('outside the valid range');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "T5b — Invalid Input: Weight Too High",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/performance/attribution",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "performance", "attribution"]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"requestId\": \"ATTR-2005b\",\n  \"portfolioId\": \"PF-2201\",\n  \"valuationDate\": \"2026-06-14\",\n  \"currency\": \"USD\",\n  \"requestedBy\": \"advisor01\",\n  \"groups\": [\n    { \"groupName\": \"Equity\",      \"weightPct\": 70, \"returnPct\": 1.5 },\n    { \"groupName\": \"FixedIncome\", \"weightPct\": 40, \"returnPct\": 0.4 }\n  ]\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('HTTP 400', () => pm.response.to.have.status(400));",
+              "pm.test('status is INVALID_INPUT', () => pm.expect(pm.response.json().status).to.eql('INVALID_INPUT'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "T6 — Idempotency: First Call",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/performance/attribution",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "performance", "attribution"]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"requestId\": \"ATTR-2006\",\n  \"portfolioId\": \"PF-2201\",\n  \"valuationDate\": \"2026-06-14\",\n  \"currency\": \"USD\",\n  \"requestedBy\": \"advisor01\",\n  \"groups\": [\n    { \"groupName\": \"Equity\",      \"weightPct\": 60, \"returnPct\": 2.0 },\n    { \"groupName\": \"FixedIncome\", \"weightPct\": 40, \"returnPct\": 0.5 }\n  ]\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+              "pm.test('status is VALID', () => pm.expect(pm.response.json().status).to.eql('VALID'));",
+              "pm.collectionVariables.set('firstProcessedAt', pm.response.json().processedAt);",
+              "pm.test('processedAt saved', () => pm.expect(pm.collectionVariables.get('firstProcessedAt')).to.not.be.empty);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "T6 — Idempotency: Repeat Call (same requestId)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/performance/attribution",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "performance", "attribution"]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"requestId\": \"ATTR-2006\",\n  \"portfolioId\": \"PF-2201\",\n  \"valuationDate\": \"2026-06-14\",\n  \"currency\": \"USD\",\n  \"requestedBy\": \"advisor01\",\n  \"groups\": [\n    { \"groupName\": \"Equity\",      \"weightPct\": 60, \"returnPct\": 2.0 },\n    { \"groupName\": \"FixedIncome\", \"weightPct\": 40, \"returnPct\": 0.5 }\n  ]\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+              "pm.test('processedAt identical to first call', () => {",
+              "  const first = pm.collectionVariables.get('firstProcessedAt');",
+              "  pm.expect(pm.response.json().processedAt).to.eql(first);",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "T7 — Missing Required Fields (Bean Validation)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/performance/attribution",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "performance", "attribution"]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"portfolioId\": \"PF-2201\",\n  \"valuationDate\": \"2026-06-14\",\n  \"currency\": \"USD\"\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('HTTP 400', () => pm.response.to.have.status(400));",
+              "pm.test('errors field present', () => pm.expect(pm.response.json()).to.have.property('errors'));"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
