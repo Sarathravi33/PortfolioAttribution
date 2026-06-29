@@ -1,11 +1,15 @@
 package com.portfolio.attribution.service;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.portfolio.attribution.model.request.AttributionRequest;
 import com.portfolio.attribution.model.request.GroupInput;
 import com.portfolio.attribution.model.response.AttributionResponse;
 import com.portfolio.attribution.model.response.AttributionStatus;
 import com.portfolio.attribution.model.response.GroupContribution;
 import com.portfolio.attribution.model.response.PricingMode;
+import com.portfolio.attribution.repository.AttributionResultEntity;
+import com.portfolio.attribution.repository.AttributionResultRepository;
 import com.portfolio.attribution.validation.AttributionRequestValidator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -25,16 +29,30 @@ public class AttributionService {
     private static final BigDecimal HUNDRED = new BigDecimal("100");
 
     private final AttributionRequestValidator validator;
+    private final AttributionResultRepository repository;
+    private final ObjectMapper objectMapper;
 
-    public AttributionService(AttributionRequestValidator validator) {
+    public AttributionService(AttributionRequestValidator validator,
+                               AttributionResultRepository repository,
+                               ObjectMapper objectMapper) {
         this.validator = validator;
+        this.repository = repository;
+        this.objectMapper = objectMapper;
     }
 
     public AttributionResponse calculate(AttributionRequest request) {
+        // Idempotency check — return cached result if requestId already processed
+        Optional<AttributionResultEntity> existing = repository.findById(request.getRequestId());
+        if (existing.isPresent()) {
+            log.info("Idempotent hit for requestId={}", request.getRequestId());
+            return deserialize(existing.get().getResponseJson());
+        }
+
+        // Weight validation gate — must run before any calculation
         Optional<String> weightError = validator.validate(request);
         if (weightError.isPresent()) {
             log.warn("Invalid weight for requestId={}: {}", request.getRequestId(), weightError.get());
-            return AttributionResponse.builder()
+            AttributionResponse response = AttributionResponse.builder()
                     .requestId(request.getRequestId())
                     .portfolioId(request.getPortfolioId())
                     .valuationDate(request.getValuationDate())
@@ -45,6 +63,8 @@ public class AttributionService {
                     .warnings(List.of(weightError.get()))
                     .processedAt(Instant.now())
                     .build();
+            persist(request.getRequestId(), response);
+            return response;
         }
 
         List<GroupContribution> contributions = new ArrayList<>();
@@ -53,6 +73,7 @@ public class AttributionService {
 
         for (GroupInput group : request.getGroups()) {
             if (group.getReturnPct() != null) {
+                // Primary pricing available
                 BigDecimal contribution = group.getWeightPct()
                         .multiply(group.getReturnPct())
                         .divide(HUNDRED, 6, RoundingMode.HALF_UP);
@@ -63,6 +84,7 @@ public class AttributionService {
                         .build());
 
             } else if (group.getFallbackReturnPct() != null) {
+                // Fallback pricing used
                 BigDecimal contribution = group.getWeightPct()
                         .multiply(group.getFallbackReturnPct())
                         .divide(HUNDRED, 6, RoundingMode.HALF_UP);
@@ -76,12 +98,14 @@ public class AttributionService {
                         group.getGroupName(), request.getRequestId());
 
             } else {
+                // Unresolvable — no primary, no fallback
                 unresolvableGroups.add(group.getGroupName());
                 warnings.add("Return unavailable for " + group.getGroupName() + ", group excluded from total");
                 log.warn("No return data for group={}, requestId={}", group.getGroupName(), request.getRequestId());
             }
         }
 
+        // Determine status based on unresolvable count
         AttributionStatus status;
         if (unresolvableGroups.isEmpty()) {
             status = AttributionStatus.VALID;
@@ -98,7 +122,7 @@ public class AttributionService {
                 .reduce(BigDecimal.ZERO, BigDecimal::add)
                 .setScale(6, RoundingMode.HALF_UP);
 
-        return AttributionResponse.builder()
+        AttributionResponse response = AttributionResponse.builder()
                 .requestId(request.getRequestId())
                 .portfolioId(request.getPortfolioId())
                 .valuationDate(request.getValuationDate())
@@ -109,5 +133,25 @@ public class AttributionService {
                 .warnings(warnings)
                 .processedAt(Instant.now())
                 .build();
+
+        persist(request.getRequestId(), response);
+        return response;
+    }
+
+    private void persist(String requestId, AttributionResponse response) {
+        try {
+            String json = objectMapper.writeValueAsString(response);
+            repository.save(new AttributionResultEntity(requestId, json, Instant.now()));
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException("Failed to serialize attribution response for requestId=" + requestId, e);
+        }
+    }
+
+    private AttributionResponse deserialize(String json) {
+        try {
+            return objectMapper.readValue(json, AttributionResponse.class);
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException("Failed to deserialize cached attribution response", e);
+        }
     }
 }
